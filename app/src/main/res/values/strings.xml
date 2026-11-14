@@ -1,0 +1,33 @@
+<resources>
+    <string name="app_name">Z-Downloader</string>
+    <string name="app_subtitle">مشغّل تنزيل التطبيقات المتوافقة لأجهزة Android TV</string>
+    <string name="section_available_apps">التطبيقات المتاحة</string>
+    <string name="action_refresh">تحديث</string>
+    <string name="action_repo_settings">المستودع</string>
+    <string name="action_download_youtube">تنزيل YouTube</string>
+    <string name="action_install_youtube">تثبيت YouTube</string>
+    <string name="action_reinstall_youtube">إعادة تثبيت YouTube</string>
+    <string name="action_cancel_download">إلغاء التنزيل</string>
+    <string name="action_delete_apk">حذف الملف</string>
+    <string name="action_retry">إعادة المحاولة</string>
+    <string name="action_allow_unknown_sources">تفعيل التثبيت من مصادر غير معروفة</string>
+    <string name="status_loading">جاري الاتصال بـ GitHub Releases (وسم 0.0.011)...</string>
+    <string name="status_compatible">متوافق مع جهازك</string>
+    <string name="status_incompatible">غير متوافق مع جهازك</string>
+    <string name="status_verified">تم التحقق من SHA-256</string>
+    <string name="status_installed">مثبّت على الجهاز</string>
+    <string name="label_version">الإصدار</string>
+    <string name="label_size">الحجم</string>
+    <string name="label_min_android">الحد الأدنى</string>
+    <string name="label_architecture">المعمارية</string>
+    <string name="label_device_info">معلومات جهازك</string>
+    <string name="repo_config_title">إعداد مستودع GitHub العام</string>
+    <string name="repo_config_hint">صيغة المستودع: owner/repo (مثال: user/Z-Downloader)</string>
+    <string name="repo_config_save">حفظ وتحديث</string>
+    <string name="repo_config_cancel">إلغاء</string>
+    <string name="repo_missing_error">لم يتم ضبط اسم مستودع GitHub في إعدادات البناء بعد. اضغط على زر «المستودع» لإدخال اسم المستودع العام بصيغة owner/repo، أو ابنِ التطبيق عبر GitHub Actions ليُضبط تلقائياً.</string>
+    <string name="cd_app_logo">شعار تطبيق Z-Downloader</string>
+    <string name="cd_youtube_logo">شعار تطبيق YouTube</string>
+    <string name="cd_refresh_icon">تحديث بيانات الإصدار</string>
+    <string name="cd_settings_icon">إعدادات المستودع</string>
+</resources>

@@ -1,0 +1,6 @@
+{
+  "name": "Z-Downloader",
+  "description": "Android TV app, official download website, and automated GitHub Releases & Pages CI/CD for installing compatible YouTube APKs without a GitHub account.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

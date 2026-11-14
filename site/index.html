@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Z-Downloader — تنزيل تطبيق Android TV</title>
+  <meta name="description" content="الموقع الرسمي لتنزيل تطبيق Z-Downloader لأجهزة Android TV لتثبيت YouTube المتوافق تلقائياً بدون متصفح أو حساب GitHub." />
+  <link rel="icon" type="image/png" href="assets/logo.png" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="page-wrapper">
+    <header class="hero-card">
+      <div class="brand-row">
+        <img src="assets/logo.png" alt="شعار Z-Downloader" class="brand-logo" width="84" height="84" />
+        <div class="brand-text">
+          <div class="badge-row">
+            <span class="badge badge-purple">Android TV</span>
+            <span class="badge badge-outline">ARMv7 / Android 7.0+</span>
+          </div>
+          <h1>Z-Downloader</h1>
+          <p class="subtitle">
+            أداة خفيفة ومستقلة لأجهزة Android TV القديمة لتنزيل وتثبيت نسخة YouTube المتوافقة مع معالج جهازك مباشرة دون الاعتماد على متصفح التلفزيون أو حساب GitHub.
+          </p>
+        </div>
+      </div>
+
+      <div class="specs-grid" aria-label="معلومات التطبيق">
+        <div class="spec-item">
+          <span class="spec-label">رقم الإصدار</span>
+          <strong class="spec-value" id="app-version"><!--VER_FALLBACK-->1.0.0 (Build 1)<!--/VER_FALLBACK--></strong>
+        </div>
+        <div class="spec-item">
+          <span class="spec-label">حجم APK</span>
+          <strong class="spec-value" id="apk-size"><!--SIZE_FALLBACK-->يُحدّث تلقائياً بعد البناء<!--/SIZE_FALLBACK--></strong>
+        </div>
+        <div class="spec-item">
+          <span class="spec-label">الحد الأدنى للنظام</span>
+          <strong class="spec-value" id="min-android">Android 7.0 (API 24)</strong>
+        </div>
+        <div class="spec-item">
+          <span class="spec-label">المعمارية</span>
+          <strong class="spec-value" id="apk-abi">ARMv7 (armeabi-v7a)</strong>
+        </div>
+      </div>
+
+      <div class="download-zone">
+        <a
+          id="download-btn"
+          class="download-btn"
+          href="downloads/Z-Downloader.apk"
+          download="Z-Downloader.apk"
+          tabindex="0"
+        >
+          <span class="btn-arrow" aria-hidden="true">&#8595;</span>
+          <span>تنزيل Z-Downloader.apk مباشرة</span>
+        </a>
+        <p id="download-status" class="download-status">
+          تنزيل مباشر من الخادم بصيغة APK — لا يتطلب تسجيل دخول.
+        </p>
+        <p id="sha-display" class="sha-display"></p>
+      </div>
+    </header>
+
+    <main class="steps-card">
+      <h2>طريقة التثبيت على التلفزيون</h2>
+      <ol class="steps-list">
+        <li>
+          <strong>1. نزّل التطبيق:</strong>
+          اضغط على زر «تنزيل Z-Downloader.apk مباشرة» أعلاه باستخدام ريموت التلفزيون.
+        </li>
+        <li>
+          <strong>2. ثبّت Z-Downloader:</strong>
+          افتح الملف المنزّل من إشعارات النظام أو مدير الملفات، واسمح بالتثبيت من مصادر غير معروفة عند الطلب.
+        </li>
+        <li>
+          <strong>3. ثبّت YouTube بضغطة زر:</strong>
+          افتح Z-Downloader لتظهر لك بطاقة YouTube المتوافقة مع جهازك مع التحقق التلقائي من SHA-256 وزر التثبيت المباشر.
+        </li>
+      </ol>
+    </main>
+
+    <footer class="site-footer">
+      <p>Z-Downloader &bull; متوافق مع Android 7.0+ &bull; يعمل بدون خدمات Google Play أو حساب GitHub</p>
+    </footer>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>

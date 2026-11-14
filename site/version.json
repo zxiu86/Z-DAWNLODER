@@ -1,0 +1,11 @@
+{
+  "appName": "Z-Downloader",
+  "packageName": "com.zxiu86.zdownloader",
+  "versionName": "1.0.0",
+  "versionCode": 1,
+  "minAndroid": "Android 7.0 (API 24)",
+  "abi": "ARMv7 (armeabi-v7a)",
+  "apkPath": "downloads/Z-Downloader.apk",
+  "sizeBytes": 0,
+  "sha256": ""
+}

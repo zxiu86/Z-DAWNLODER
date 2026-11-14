@@ -1,0 +1,348 @@
+name: Build Z-Downloader, Publish YouTube Release & Deploy Site
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "z-downloader-${{ github.ref }}"
+  cancel-in-progress: false
+
+jobs:
+  build-app:
+    name: Build & Test Z-Downloader APK
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Ensure gradlew is executable
+        run: chmod +x ./gradlew
+
+      - name: Run Unit & Robolectric Tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
+
+      - name: Run Android Lint
+        run: ./gradlew :app:lintDebug --no-daemon
+
+      - name: Prepare Release Signing Keystore
+        id: signing
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          KEYSTORE_FILE="${RUNNER_TEMP}/release-upload.jks"
+          if [ -n "$RELEASE_KEYSTORE_BASE64" ] && [ -n "$RELEASE_STORE_PASSWORD" ] && [ -n "$RELEASE_KEY_PASSWORD" ]; then
+            echo "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_FILE"
+            echo "KEYSTORE_PATH=$KEYSTORE_FILE" >> "$GITHUB_ENV"
+            echo "STORE_PASSWORD=$RELEASE_STORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=$RELEASE_KEY_PASSWORD" >> "$GITHUB_ENV"
+          else
+            DEFAULT_PASS="zdownloader-release-key"
+            keytool -genkeypair -v \
+              -keystore "$KEYSTORE_FILE" \
+              -storepass "$DEFAULT_PASS" \
+              -alias upload \
+              -keypass "$DEFAULT_PASS" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Z-Downloader, OU=AndroidTV, O=Z-Downloader, L=Internet, ST=NA, C=US"
+            echo "KEYSTORE_PATH=$KEYSTORE_FILE" >> "$GITHUB_ENV"
+            echo "STORE_PASSWORD=$DEFAULT_PASS" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=$DEFAULT_PASS" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build ARMv7 Release APK
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: ./gradlew :app:assembleRelease --no-daemon
+
+      - name: Verify & Package Z-Downloader.apk
+        run: |
+          mkdir -p build-out
+          APK_PATH="$(find app/build/outputs/apk/release -name '*.apk' | head -n 1)"
+          if [ -z "$APK_PATH" ] || [ ! -s "$APK_PATH" ]; then
+            echo "::error::Release APK was not generated."
+            exit 1
+          fi
+
+          cp "$APK_PATH" build-out/Z-Downloader.apk
+
+          SDK_DIR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          AAPT2_BIN="$(find "$SDK_DIR/build-tools" -name 'aapt2' | sort -V | tail -n 1)"
+          if [ -n "$AAPT2_BIN" ]; then
+            "$AAPT2_BIN" dump badging build-out/Z-Downloader.apk > build-out/badging.txt
+            cat build-out/badging.txt
+          fi
+
+          python3 - <<'PY'
+          import hashlib, json, os, re
+
+          apk_path = "build-out/Z-Downloader.apk"
+          size_bytes = os.path.getsize(apk_path)
+          sha256 = hashlib.sha256(open(apk_path, "rb").read()).hexdigest()
+
+          ver_name = "1.0.0"
+          ver_code = 1
+          min_sdk = 24
+          abi = "ARMv7 (armeabi-v7a)"
+
+          badging_path = "build-out/badging.txt"
+          if os.path.exists(badging_path):
+              txt = open(badging_path, "r", encoding="utf-8", errors="ignore").read()
+              m = re.search(r"versionCode='(\d+)'\s+versionName='([^']+)'", txt)
+              if m:
+                  ver_code = int(m.group(1))
+                  ver_name = m.group(2)
+              m_sdk = re.search(r"(?:minSdkVersion|sdkVersion):'(\d+)'", txt)
+              if m_sdk:
+                  min_sdk = int(m_sdk.group(1))
+
+          data = {
+              "appName": "Z-Downloader",
+              "packageName": "com.zxiu86.zdownloader",
+              "versionName": ver_name,
+              "versionCode": ver_code,
+              "minAndroid": f"Android 7.0 (API {min_sdk})",
+              "abi": abi,
+              "apkPath": "downloads/Z-Downloader.apk",
+              "sizeBytes": size_bytes,
+              "sha256": sha256,
+          }
+          with open("build-out/version.json", "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+          PY
+
+      - name: Upload built Z-Downloader APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: z-downloader-apk
+          path: |
+            build-out/Z-Downloader.apk
+            build-out/version.json
+          if-no-files-found: error
+
+  publish-youtube-release:
+    name: Validate & Publish YouTube APK (Release 0.0.011)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Android SDK for aapt2 inspection
+        uses: android-actions/setup-android@v3
+
+      - name: Validate version/youtube.apk & Generate youtube-metadata.json
+        run: |
+          APK="version/youtube.apk"
+          if [ ! -f "$APK" ]; then
+            echo "::error::File version/youtube.apk does not exist. Place a valid YouTube APK at version/youtube.apk before publishing Release 0.0.011."
+            exit 1
+          fi
+
+          FILE_SIZE=$(stat -c%s "$APK")
+          if [ "$FILE_SIZE" -lt 102400 ]; then
+            echo "::error::version/youtube.apk is too small ($FILE_SIZE bytes) to be a valid Android APK."
+            exit 1
+          fi
+
+          MIME_TYPE=$(file -b --mime-type "$APK")
+          if [ "$MIME_TYPE" = "text/html" ] || [ "$MIME_TYPE" = "text/plain" ]; then
+            echo "::error::version/youtube.apk is a $MIME_TYPE file (not a real APK)."
+            exit 1
+          fi
+
+          MAGIC=$(head -c 2 "$APK" | od -An -tx1 | tr -d ' \n')
+          if [ "$MAGIC" != "504b" ]; then
+            echo "::error::version/youtube.apk does not start with ZIP/APK magic bytes (PK)."
+            exit 1
+          fi
+
+          if ! unzip -t "$APK" >/dev/null 2>&1; then
+            echo "::error::version/youtube.apk failed ZIP archive integrity verification."
+            exit 1
+          fi
+
+          if ! unzip -l "$APK" | grep -q "AndroidManifest.xml"; then
+            echo "::error::version/youtube.apk does not contain AndroidManifest.xml."
+            exit 1
+          fi
+
+          SDK_DIR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          AAPT2_BIN="$(find "$SDK_DIR/build-tools" -name 'aapt2' | sort -V | tail -n 1)"
+          if [ -z "$AAPT2_BIN" ]; then
+            echo "::error::aapt2 not found in Android SDK build-tools."
+            exit 1
+          fi
+
+          if ! "$AAPT2_BIN" dump badging "$APK" > /tmp/youtube_badging.txt; then
+            echo "::error::aapt2 could not parse version/youtube.apk. The APK appears invalid or corrupted."
+            exit 1
+          fi
+
+          unzip -Z1 "$APK" | grep -E '^lib/[^/]+/.*\.so$' | cut -d'/' -f2 | sort -u > /tmp/youtube_zip_abis.txt || true
+
+          python3 - <<'PY'
+          import hashlib, json, os, re
+
+          apk = "version/youtube.apk"
+          size_bytes = os.path.getsize(apk)
+          with open(apk, "rb") as f:
+              h = hashlib.sha256()
+              while True:
+                  chunk = f.read(65536)
+                  if not chunk:
+                      break
+                  h.update(chunk)
+          sha256 = h.hexdigest()
+
+          badging = open("/tmp/youtube_badging.txt", "r", encoding="utf-8", errors="ignore").read()
+          pkg_m = re.search(r"package:\s+name='([^']+)'\s+versionCode='(\d+)'\s+versionName='([^']*)'", badging)
+          if not pkg_m:
+              raise SystemExit("Failed to extract package info from aapt2 output")
+
+          pkg_name = pkg_m.group(1)
+          ver_code = int(pkg_m.group(2))
+          ver_name = pkg_m.group(3) or str(ver_code)
+
+          label_m = re.search(r"application-label:'([^']+)'", badging)
+          app_name = label_m.group(1) if label_m else "YouTube"
+
+          sdk_m = re.search(r"(?:minSdkVersion|sdkVersion):'(\d+)'", badging)
+          min_sdk = int(sdk_m.group(1)) if sdk_m else 21
+
+          abis = []
+          native_m = re.search(r"native-code:\s*(.+)", badging)
+          if native_m:
+              abis = re.findall(r"'([^']+)'", native_m.group(1))
+          if not abis and os.path.exists("/tmp/youtube_zip_abis.txt"):
+              abis = [line.strip() for line in open("/tmp/youtube_zip_abis.txt") if line.strip()]
+          if not abis:
+              abis = ["universal"]
+
+          metadata = {
+              "app_name": app_name,
+              "package_name": pkg_name,
+              "version_name": ver_name,
+              "version_code": ver_code,
+              "file_name": "youtube.apk",
+              "file_size": size_bytes,
+              "sha256": sha256,
+              "min_sdk": min_sdk,
+              "supported_abis": abis,
+          }
+          with open("youtube-metadata.json", "w", encoding="utf-8") as f:
+              json.dump(metadata, f, ensure_ascii=False, indent=2)
+          print(json.dumps(metadata, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Create or Update GitHub Release 0.0.011
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="0.0.011"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — updating youtube.apk and youtube-metadata.json safely..."
+            gh release upload "$TAG" version/youtube.apk youtube-metadata.json \
+              --repo "${{ github.repository }}" \
+              --clobber
+          else
+            echo "Creating Release $TAG..."
+            gh release create "$TAG" version/youtube.apk youtube-metadata.json \
+              --repo "${{ github.repository }}" \
+              --title "YouTube TV $TAG" \
+              --notes "Automated verified YouTube APK release ($TAG) consumed by Z-Downloader."
+          fi
+
+      - name: Verify GitHub Release 0.0.011 API & Assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api "repos/${{ github.repository }}/releases/tags/0.0.011" --jq '.assets[].name' > /tmp/release_assets.txt
+          cat /tmp/release_assets.txt
+          grep -qx "youtube.apk" /tmp/release_assets.txt
+          grep -qx "youtube-metadata.json" /tmp/release_assets.txt
+
+  deploy-site:
+    name: Package & Deploy Z-Downloader Website
+    needs: [build-app]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download built Z-Downloader APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: z-downloader-apk
+          path: site/downloads
+
+      - name: Prepare site/downloads & version metadata
+        run: |
+          test -s site/downloads/Z-Downloader.apk
+          mv site/downloads/version.json site/version.json
+          python3 - <<'PY'
+          import json, re
+
+          ver = json.load(open("site/version.json", "r", encoding="utf-8"))
+          size_mb = ver["sizeBytes"] / (1024 * 1024)
+          size_str = f"{size_mb:.1f} MB" if size_mb >= 1 else f"{round(ver['sizeBytes'] / 1024)} KB"
+          ver_str = f"{ver['versionName']} (Build {ver['versionCode']})"
+
+          html = open("site/index.html", "r", encoding="utf-8").read()
+          html = re.sub(
+              r"<!--VER_FALLBACK-->.*?<!--/VER_FALLBACK-->",
+              f"<!--VER_FALLBACK-->{ver_str}<!--/VER_FALLBACK-->",
+              html,
+          )
+          html = re.sub(
+              r"<!--SIZE_FALLBACK-->.*?<!--/SIZE_FALLBACK-->",
+              f"<!--SIZE_FALLBACK-->{size_str}<!--/SIZE_FALLBACK-->",
+              html,
+          )
+          open("site/index.html", "w", encoding="utf-8").write(html)
+          PY
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

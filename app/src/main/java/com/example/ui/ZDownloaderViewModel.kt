@@ -1,6 +1,5 @@
 package com.example.ui
 
-import android.app.Activity
 import android.app.Application
 import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
@@ -16,7 +15,6 @@ import com.example.data.model.DownloadState
 import com.example.data.model.InstallFeedback
 import com.example.data.model.ReleaseLoadState
 import com.example.data.model.YoutubeMetadata
-import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -114,14 +112,14 @@ class ZDownloaderViewModel(
         }
         is GitHubReleaseClient.FetchResult.Success -> {
           val deviceInfo = _uiState.value.deviceInfo
+          val existingReady = checkExistingVerifiedApk(result.metadata)
+          val enrichedMeta = enrichMetadataWithInspection(result.metadata, existingReady?.inspection)
           val installed =
-              ApkVerifierAndInstaller.isPackageInstalled(context, result.metadata.packageName)
-
-          val existingReady = checkExistingVerifiedApk(result.metadata, deviceInfo)
+              ApkVerifierAndInstaller.isPackageInstalled(context, enrichedMeta.packageName)
           val compatibility =
               ApkVerifierAndInstaller.checkCompatibility(
                   device = deviceInfo,
-                  metadata = result.metadata,
+                  metadata = enrichedMeta,
                   localInspection = existingReady?.inspection,
               )
 
@@ -130,7 +128,7 @@ class ZDownloaderViewModel(
                 releaseState =
                     ReleaseLoadState.Ready(
                         release = result.release,
-                        metadata = result.metadata,
+                        metadata = enrichedMeta,
                         compatibility = compatibility,
                         isAlreadyInstalledOnDevice = installed,
                     ),
@@ -147,9 +145,25 @@ class ZDownloaderViewModel(
     }
   }
 
+  private fun enrichMetadataWithInspection(
+      metadata: YoutubeMetadata,
+      inspection: ApkLocalInspection?,
+  ): YoutubeMetadata {
+    if (inspection == null || !inspection.isValidApk) return metadata
+    return metadata.copy(
+        packageName = inspection.packageName?.takeIf { it.isNotBlank() } ?: metadata.packageName,
+        versionName = inspection.versionName?.takeIf { it.isNotBlank() } ?: metadata.versionName,
+        versionCode = inspection.versionCode ?: metadata.versionCode,
+        minSdk = inspection.minSdk ?: metadata.minSdk,
+        supportedAbis =
+            if (inspection.nativeAbis.isNotEmpty()) inspection.nativeAbis
+            else if (metadata.supportedAbis.isNotEmpty()) metadata.supportedAbis
+            else listOf("universal"),
+    )
+  }
+
   private suspend fun checkExistingVerifiedApk(
       metadata: YoutubeMetadata,
-      deviceInfo: DeviceInfo,
   ): DownloadState.ReadyToInstall? =
       withContext(Dispatchers.IO) {
         val context = getApplication<Application>()
@@ -168,7 +182,7 @@ class ZDownloaderViewModel(
               return@withContext null
             }
 
-        if (!sha256.equals(metadata.sha256, ignoreCase = true)) {
+        if (metadata.sha256.isNotBlank() && !sha256.equals(metadata.sha256, ignoreCase = true)) {
           apkFile.delete()
           return@withContext null
         }
@@ -220,9 +234,23 @@ class ZDownloaderViewModel(
     downloadJob =
         viewModelScope.launch {
           // Do not download twice if valid verified file is already stored locally.
-          val existing = checkExistingVerifiedApk(readyState.metadata, _uiState.value.deviceInfo)
+          val existing = checkExistingVerifiedApk(readyState.metadata)
           if (existing != null) {
-            _uiState.update { it.copy(downloadState = existing) }
+            val enrichedMeta = enrichMetadataWithInspection(readyState.metadata, existing.inspection)
+            val compat =
+                ApkVerifierAndInstaller.checkCompatibility(
+                    device = _uiState.value.deviceInfo,
+                    metadata = enrichedMeta,
+                    localInspection = existing.inspection,
+                )
+            _uiState.update { state ->
+              val updatedRelease =
+                  (state.releaseState as? ReleaseLoadState.Ready)?.copy(
+                      metadata = enrichedMeta,
+                      compatibility = compat,
+                  ) ?: state.releaseState
+              state.copy(releaseState = updatedRelease, downloadState = existing)
+            }
             return@launch
           }
 
@@ -284,17 +312,22 @@ class ZDownloaderViewModel(
                 return@launch
               }
 
+              val enrichedMeta = enrichMetadataWithInspection(readyState.metadata, inspection)
+              val installed =
+                  ApkVerifierAndInstaller.isPackageInstalled(context, enrichedMeta.packageName)
               val finalCompatibility =
                   ApkVerifierAndInstaller.checkCompatibility(
                       device = _uiState.value.deviceInfo,
-                      metadata = readyState.metadata,
+                      metadata = enrichedMeta,
                       localInspection = inspection,
                   )
 
               _uiState.update { state ->
                 val updatedReleaseState =
                     (state.releaseState as? ReleaseLoadState.Ready)?.copy(
-                        compatibility = finalCompatibility
+                        metadata = enrichedMeta,
+                        compatibility = finalCompatibility,
+                        isAlreadyInstalledOnDevice = installed,
                     ) ?: state.releaseState
                 state.copy(
                     releaseState = updatedReleaseState,
@@ -355,12 +388,15 @@ class ZDownloaderViewModel(
         return@launch
       }
 
+      val expectedHash =
+          readyState.metadata.sha256.takeIf { it.isNotBlank() } ?: readyApk.verifiedSha256
+
       // Re-verify SHA-256 and APK integrity right before handing off to Android package installer.
       val (shaMatch, inspection) =
           withContext(Dispatchers.IO) {
             val currentSha = ApkVerifierAndInstaller.computeSha256(readyApk.apkFile)
             val inspected = ApkVerifierAndInstaller.inspectApk(context, readyApk.apkFile)
-            Pair(currentSha.equals(readyState.metadata.sha256, ignoreCase = true), inspected)
+            Pair(currentSha.equals(expectedHash, ignoreCase = true), inspected)
           }
 
       if (!shaMatch) {
@@ -465,7 +501,7 @@ class ZDownloaderViewModel(
     val context = getApplication<Application>()
     val readyState = _uiState.value.releaseState as? ReleaseLoadState.Ready
     val pkgName =
-        ( _uiState.value.downloadState as? DownloadState.ReadyToInstall)?.inspection?.packageName
+        (_uiState.value.downloadState as? DownloadState.ReadyToInstall)?.inspection?.packageName
             ?: readyState?.metadata?.packageName
             ?: "com.google.android.youtube.tv"
 
@@ -479,11 +515,11 @@ class ZDownloaderViewModel(
 
       val feedback =
           when {
-            resultCode == Activity.RESULT_OK ->
+            resultCode == android.app.Activity.RESULT_OK ->
                 InstallFeedback.Success("تم تثبيت YouTube بنجاح! يمكنك تشغيله الآن من قائمة التطبيقات.")
             isNowInstalled ->
                 InstallFeedback.Success("تم التحقق: تطبيق YouTube مثبّت وجاهز على جهازك.")
-            resultCode == Activity.RESULT_CANCELED ->
+            resultCode == android.app.Activity.RESULT_CANCELED ->
                 InstallFeedback.Warning(
                     "لم يكتمل التثبيت (تم الإلغاء أو رُفض التثبيت من النظام). تأكد من تفعيل المصادر غير المعروفة وتوافق التوقيع."
                 )

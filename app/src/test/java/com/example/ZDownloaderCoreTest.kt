@@ -65,17 +65,52 @@ class ZDownloaderCoreTest {
     )
   }
 
+  @Test
+  fun `parseReleaseJson works with youtube apk only and optional asset digest`() {
+    val digestHex = "c".repeat(64)
+    val json =
+        """
+        {
+          "tag_name": "0.0.011",
+          "name": "YouTube TV 0.0.011",
+          "published_at": "2026-11-14T00:00:00Z",
+          "assets": [
+            {
+              "name": "youtube.apk",
+              "size": 45000000,
+              "digest": "sha256:$digestHex",
+              "browser_download_url": "https://github.com/owner/repo/releases/download/0.0.011/youtube.apk"
+            }
+          ]
+        }
+        """.trimIndent()
+
+    val info = GitHubReleaseClient.parseReleaseJson(json)
+    assertEquals("0.0.011", info.tagName)
+    assertEquals(45000000L, info.apkSizeBytes)
+    assertEquals(digestHex, info.apkDigestSha256)
+    assertEquals(null, info.metadataDownloadUrl)
+    assertEquals(
+        "https://github.com/owner/repo/releases/download/0.0.011/youtube.apk",
+        info.apkDownloadUrl,
+    )
+
+    val fallbackMeta = GitHubReleaseClient.metadataFromReleaseOnly(info)
+    assertEquals(digestHex, fallbackMeta.sha256)
+    assertEquals(45000000L, fallbackMeta.fileSizeBytes)
+  }
+
   @Test(expected = IllegalStateException::class)
-  fun `parseReleaseJson throws when youtube apk asset is missing`() {
+  fun `parseReleaseJson throws when no apk asset exists in release`() {
     val json =
         """
         {
           "tag_name": "0.0.011",
           "assets": [
             {
-              "name": "youtube-metadata.json",
+              "name": "README.txt",
               "size": 512,
-              "browser_download_url": "https://github.com/owner/repo/releases/download/0.0.011/youtube-metadata.json"
+              "browser_download_url": "https://github.com/owner/repo/releases/download/0.0.011/README.txt"
             }
           ]
         }

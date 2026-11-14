@@ -9,7 +9,8 @@ data class GitHubReleaseInfo(
     val apkAssetName: String,
     val apkDownloadUrl: String,
     val apkSizeBytes: Long,
-    val metadataDownloadUrl: String,
+    val apkDigestSha256: String = "",
+    val metadataDownloadUrl: String? = null,
 )
 
 data class YoutubeMetadata(

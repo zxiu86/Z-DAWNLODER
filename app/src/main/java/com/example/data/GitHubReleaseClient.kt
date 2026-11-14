@@ -71,7 +71,7 @@ class GitHubReleaseClient(
                   }
                   404 ->
                       return@withContext FetchResult.Failure(
-                          "لم يتم العثور على الإصدار ($tagName) في المستودع ($cleanRepo). تأكد من أن المستودع عام وأن الوسم $tagName منشور."
+                          "لم يتم العثور على الإصدار ($tagName) في المستودع ($cleanRepo). تأكد من أن المستودع عام وأن Release $tagName منشور."
                       )
                   403 ->
                       return@withContext FetchResult.Failure(
@@ -98,40 +98,45 @@ class GitHubReleaseClient(
               return@withContext FetchResult.Failure("بيانات الإصدار المستلمة من GitHub غير صالحة.")
             }
 
-        val metadataRequest =
-            Request.Builder()
-                .url(releaseInfo.metadataDownloadUrl)
-                .header("Accept", "application/json")
-                .header("User-Agent", USER_AGENT)
-                .get()
-                .build()
-
-        val metadataJson =
-            try {
-              httpClient.newCall(metadataRequest).execute().use { response ->
-                if (!response.isSuccessful) {
-                  return@withContext FetchResult.Failure(
-                      "تعذّر تنزيل ملف youtube-metadata.json (HTTP ${response.code})."
-                  )
-                }
-                response.body?.string()
-                    ?: return@withContext FetchResult.Failure(
-                        "ملف youtube-metadata.json فارغ."
-                    )
-              }
-            } catch (e: CancellationException) {
-              throw e
-            } catch (e: Exception) {
-              return@withContext FetchResult.Failure(mapNetworkError(e))
-            }
-
+        val metadataUrl = releaseInfo.metadataDownloadUrl
         val metadata =
-            try {
-              parseMetadataJson(metadataJson, fallbackSizeBytes = releaseInfo.apkSizeBytes)
-            } catch (e: Exception) {
-              return@withContext FetchResult.Failure(
-                  "ملف youtube-metadata.json تالف أو غير مكتمل: ${e.message ?: "خطأ في التنسيق"}"
-              )
+            if (!metadataUrl.isNullOrBlank()) {
+              val metadataRequest =
+                  Request.Builder()
+                      .url(metadataUrl)
+                      .header("Accept", "application/json")
+                      .header("User-Agent", USER_AGENT)
+                      .get()
+                      .build()
+
+              val metadataJson =
+                  try {
+                    httpClient.newCall(metadataRequest).execute().use { response ->
+                      if (!response.isSuccessful) {
+                        return@withContext FetchResult.Failure(
+                            "تعذّر تنزيل ملف youtube-metadata.json (HTTP ${response.code})."
+                        )
+                      }
+                      response.body?.string()
+                          ?: return@withContext FetchResult.Failure(
+                              "ملف youtube-metadata.json فارغ."
+                          )
+                    }
+                  } catch (e: CancellationException) {
+                    throw e
+                  } catch (e: Exception) {
+                    return@withContext FetchResult.Failure(mapNetworkError(e))
+                  }
+
+              try {
+                parseMetadataJson(metadataJson, fallbackSizeBytes = releaseInfo.apkSizeBytes)
+              } catch (e: Exception) {
+                return@withContext FetchResult.Failure(
+                    "ملف youtube-metadata.json تالف أو غير مكتمل: ${e.message ?: "خطأ في التنسيق"}"
+                )
+              }
+            } else {
+              metadataFromReleaseOnly(releaseInfo)
             }
 
         FetchResult.Success(releaseInfo, metadata)
@@ -146,7 +151,9 @@ class GitHubReleaseClient(
       onProgress: (downloadedBytes: Long, totalBytes: Long) -> Unit,
   ): DownloadResult =
       withContext(Dispatchers.IO) {
-        if (!url.startsWith("https://", ignoreCase = true) && !url.startsWith("http://localhost") && !url.startsWith("http://127.0.0.1")) {
+        if (!url.startsWith("https://", ignoreCase = true) &&
+            !url.startsWith("http://localhost") &&
+            !url.startsWith("http://127.0.0.1")) {
           return@withContext DownloadResult.Failure("رابط التنزيل غير آمن أو غير صالح.")
         }
 
@@ -160,7 +167,10 @@ class GitHubReleaseClient(
             Request.Builder()
                 .url(url)
                 .header("User-Agent", USER_AGENT)
-                .header("Accept", "application/vnd.android.package-archive, application/octet-stream, */*")
+                .header(
+                    "Accept",
+                    "application/vnd.android.package-archive, application/octet-stream, */*",
+                )
                 .get()
                 .build()
 
@@ -173,7 +183,7 @@ class GitHubReleaseClient(
               in 200..299 -> Unit
               404 ->
                   return@withContext DownloadResult.Failure(
-                      "ملف youtube.apk غير موجود على الخادم (HTTP 404)."
+                      "ملف APK غير موجود في Release على الخادم (HTTP 404)."
                   )
               403 ->
                   return@withContext DownloadResult.Failure(
@@ -301,6 +311,30 @@ class GitHubReleaseClient(
             .followSslRedirects(true)
             .build()
 
+    fun extractSha256FromDigest(digest: String?): String {
+      val trimmed = digest?.trim().orEmpty()
+      if (trimmed.startsWith("sha256:", ignoreCase = true)) {
+        val hex = trimmed.substringAfter(":").trim().lowercase(Locale.US)
+        if (hex.length == 64 && hex.all { it in '0'..'9' || it in 'a'..'f' }) {
+          return hex
+        }
+      }
+      return ""
+    }
+
+    fun metadataFromReleaseOnly(release: GitHubReleaseInfo): YoutubeMetadata =
+        YoutubeMetadata(
+            appName = "YouTube",
+            packageName = "com.google.android.youtube.tv",
+            versionName = release.releaseName.ifBlank { release.tagName },
+            versionCode = 0L,
+            fileName = release.apkAssetName,
+            fileSizeBytes = release.apkSizeBytes,
+            sha256 = release.apkDigestSha256,
+            minSdk = 24,
+            supportedAbis = emptyList(),
+        )
+
     fun parseReleaseJson(jsonString: String): GitHubReleaseInfo {
       val root = JSONObject(jsonString)
       val tagName = root.optString("tag_name", "").trim()
@@ -308,35 +342,52 @@ class GitHubReleaseClient(
       val publishedAt = root.optString("published_at", "").trim()
       val assets = root.optJSONArray("assets") ?: JSONArray()
 
-      var apkUrl = ""
-      var apkSize = 0L
-      var metadataUrl = ""
+      var exactApkName = ""
+      var exactApkUrl = ""
+      var exactApkSize = 0L
+      var exactApkDigest = ""
+
+      var fallbackApkName = ""
+      var fallbackApkUrl = ""
+      var fallbackApkSize = 0L
+      var fallbackApkDigest = ""
+
+      var metadataUrl: String? = null
 
       for (i in 0 until assets.length()) {
         val asset = assets.optJSONObject(i) ?: continue
         val name = asset.optString("name", "").trim()
         val downloadUrl = asset.optString("browser_download_url", "").trim()
         val size = asset.optLong("size", 0L)
+        val digestSha = extractSha256FromDigest(asset.optString("digest", ""))
 
-        when (name) {
-          APK_ASSET_NAME -> {
-            apkUrl = downloadUrl
-            apkSize = size
+        when {
+          name.equals(APK_ASSET_NAME, ignoreCase = true) -> {
+            exactApkName = name
+            exactApkUrl = downloadUrl
+            exactApkSize = size
+            exactApkDigest = digestSha
           }
-          METADATA_ASSET_NAME -> {
-            metadataUrl = downloadUrl
+          name.equals(METADATA_ASSET_NAME, ignoreCase = true) -> {
+            metadataUrl = downloadUrl.takeIf { it.isNotEmpty() }
+          }
+          name.endsWith(".apk", ignoreCase = true) && fallbackApkUrl.isEmpty() -> {
+            fallbackApkName = name
+            fallbackApkUrl = downloadUrl
+            fallbackApkSize = size
+            fallbackApkDigest = digestSha
           }
         }
       }
 
-      if (apkUrl.isEmpty()) {
+      val finalApkUrl = exactApkUrl.ifEmpty { fallbackApkUrl }
+      val finalApkName = exactApkName.ifEmpty { fallbackApkName }
+      val finalApkSize = if (exactApkUrl.isNotEmpty()) exactApkSize else fallbackApkSize
+      val finalApkDigest = if (exactApkUrl.isNotEmpty()) exactApkDigest else fallbackApkDigest
+
+      if (finalApkUrl.isEmpty()) {
         throw IllegalStateException(
-            "ملف $APK_ASSET_NAME غير موجود داخل أصول الإصدار $tagName على GitHub."
-        )
-      }
-      if (metadataUrl.isEmpty()) {
-        throw IllegalStateException(
-            "ملف $METADATA_ASSET_NAME غير موجود داخل أصول الإصدار $tagName للتحقق من التكامل والبصمة."
+            "لم يتم العثور على ملف youtube.apk (أو أي ملف APK) داخل أصول الإصدار $tagName على GitHub."
         )
       }
 
@@ -344,9 +395,10 @@ class GitHubReleaseClient(
           tagName = tagName,
           releaseName = releaseName,
           publishedAt = publishedAt,
-          apkAssetName = APK_ASSET_NAME,
-          apkDownloadUrl = apkUrl,
-          apkSizeBytes = apkSize,
+          apkAssetName = finalApkName,
+          apkDownloadUrl = finalApkUrl,
+          apkSizeBytes = finalApkSize,
+          apkDigestSha256 = finalApkDigest,
           metadataDownloadUrl = metadataUrl,
       )
     }

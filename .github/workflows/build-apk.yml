@@ -1,4 +1,4 @@
-name: Build Z-Downloader, Publish YouTube Release & Deploy Site
+name: Build Z-Downloader APK & Deploy Site
 
 on:
   push:
@@ -30,13 +30,27 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: |
-            platform-tools
-            build-tools;36.0.0
-            platforms;android-36.1
+      - name: Set up Android SDK & Accept Licenses
+        run: |
+          SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if [ ! -d "$SDK_DIR" ]; then
+            echo "::error::Android SDK directory not found at $SDK_DIR"
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
+
+          SDKMANAGER="$(find "$SDK_DIR/cmdline-tools" -name 'sdkmanager' | sort -V | tail -n 1)"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager not found inside $SDK_DIR/cmdline-tools"
+            exit 1
+          fi
+
+          yes | "$SDKMANAGER" --sdk_root="$SDK_DIR" --licenses >/dev/null || true
+          "$SDKMANAGER" --sdk_root="$SDK_DIR" \
+            "platform-tools" \
+            "build-tools;36.0.0" \
+            "platforms;android-36.1"
 
       - name: Validate Gradle Wrapper
         uses: gradle/actions/wrapper-validation@v4
@@ -54,7 +68,6 @@ jobs:
         run: ./gradlew :app:lintDebug --no-daemon
 
       - name: Prepare Release Signing Keystore
-        id: signing
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
           RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
@@ -149,160 +162,6 @@ jobs:
             build-out/Z-Downloader.apk
             build-out/version.json
           if-no-files-found: error
-
-  publish-youtube-release:
-    name: Validate & Publish YouTube APK (Release 0.0.011)
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Android SDK for aapt2 inspection
-        uses: android-actions/setup-android@v4
-        with:
-          packages: |
-            build-tools;36.0.0
-
-      - name: Validate version/youtube.apk & Generate youtube-metadata.json
-        run: |
-          APK="version/youtube.apk"
-          if [ ! -f "$APK" ]; then
-            echo "::error::File version/youtube.apk does not exist. Place a valid YouTube APK at version/youtube.apk before publishing Release 0.0.011."
-            exit 1
-          fi
-
-          FILE_SIZE=$(stat -c%s "$APK")
-          if [ "$FILE_SIZE" -lt 102400 ]; then
-            echo "::error::version/youtube.apk is too small ($FILE_SIZE bytes) to be a valid Android APK."
-            exit 1
-          fi
-
-          MIME_TYPE=$(file -b --mime-type "$APK")
-          if [ "$MIME_TYPE" = "text/html" ] || [ "$MIME_TYPE" = "text/plain" ]; then
-            echo "::error::version/youtube.apk is a $MIME_TYPE file (not a real APK)."
-            exit 1
-          fi
-
-          MAGIC=$(head -c 2 "$APK" | od -An -tx1 | tr -d ' \n')
-          if [ "$MAGIC" != "504b" ]; then
-            echo "::error::version/youtube.apk does not start with ZIP/APK magic bytes (PK)."
-            exit 1
-          fi
-
-          python3 - <<'PY'
-          import zipfile
-          apk = "version/youtube.apk"
-          with zipfile.ZipFile(apk, "r") as zf:
-              bad = zf.testzip()
-              if bad is not None:
-                  raise SystemExit(f"::error::version/youtube.apk is corrupted at entry: {bad}")
-              names = zf.namelist()
-              if "AndroidManifest.xml" not in names:
-                  raise SystemExit("::error::version/youtube.apk does not contain AndroidManifest.xml.")
-              abis = sorted({
-                  n.split("/")[1]
-                  for n in names
-                  if n.startswith("lib/") and n.endswith(".so") and len(n.split("/")) >= 3 and n.split("/")[1]
-              })
-          with open("/tmp/youtube_zip_abis.txt", "w", encoding="utf-8") as out:
-              for abi in abis:
-                  out.write(abi + "\n")
-          PY
-
-          SDK_DIR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
-          AAPT2_BIN="$(find "$SDK_DIR/build-tools" -name 'aapt2' | sort -V | tail -n 1)"
-          if [ -z "$AAPT2_BIN" ]; then
-            echo "::error::aapt2 not found in Android SDK build-tools."
-            exit 1
-          fi
-
-          if ! "$AAPT2_BIN" dump badging "$APK" > /tmp/youtube_badging.txt; then
-            echo "::error::aapt2 could not parse version/youtube.apk. The APK appears invalid or corrupted."
-            exit 1
-          fi
-
-          python3 - <<'PY'
-          import hashlib, json, os, re
-
-          apk = "version/youtube.apk"
-          size_bytes = os.path.getsize(apk)
-          with open(apk, "rb") as f:
-              h = hashlib.sha256()
-              while True:
-                  chunk = f.read(65536)
-                  if not chunk:
-                      break
-                  h.update(chunk)
-          sha256 = h.hexdigest()
-
-          badging = open("/tmp/youtube_badging.txt", "r", encoding="utf-8", errors="ignore").read()
-          pkg_m = re.search(r"package:\s+name='([^']+)'\s+versionCode='(\d+)'\s+versionName='([^']*)'", badging)
-          if not pkg_m:
-              raise SystemExit("Failed to extract package info from aapt2 output")
-
-          pkg_name = pkg_m.group(1)
-          ver_code = int(pkg_m.group(2))
-          ver_name = pkg_m.group(3) or str(ver_code)
-
-          label_m = re.search(r"application-label:'([^']+)'", badging)
-          app_name = label_m.group(1) if label_m else "YouTube"
-
-          sdk_m = re.search(r"(?:minSdkVersion|sdkVersion):'(\d+)'", badging)
-          min_sdk = int(sdk_m.group(1)) if sdk_m else 21
-
-          abis = []
-          native_m = re.search(r"native-code:\s*(.+)", badging)
-          if native_m:
-              abis = re.findall(r"'([^']+)'", native_m.group(1))
-          if not abis and os.path.exists("/tmp/youtube_zip_abis.txt"):
-              abis = [line.strip() for line in open("/tmp/youtube_zip_abis.txt") if line.strip()]
-          if not abis:
-              abis = ["universal"]
-
-          metadata = {
-              "app_name": app_name,
-              "package_name": pkg_name,
-              "version_name": ver_name,
-              "version_code": ver_code,
-              "file_name": "youtube.apk",
-              "file_size": size_bytes,
-              "sha256": sha256,
-              "min_sdk": min_sdk,
-              "supported_abis": abis,
-          }
-          with open("youtube-metadata.json", "w", encoding="utf-8") as f:
-              json.dump(metadata, f, ensure_ascii=False, indent=2)
-          print(json.dumps(metadata, ensure_ascii=False, indent=2))
-          PY
-
-      - name: Create or Update GitHub Release 0.0.011
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="0.0.011"
-          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "Release $TAG already exists — updating youtube.apk and youtube-metadata.json safely..."
-            gh release upload "$TAG" version/youtube.apk youtube-metadata.json \
-              --repo "${{ github.repository }}" \
-              --clobber
-          else
-            echo "Creating Release $TAG..."
-            gh release create "$TAG" version/youtube.apk youtube-metadata.json \
-              --repo "${{ github.repository }}" \
-              --title "YouTube TV $TAG" \
-              --notes "Automated verified YouTube APK release ($TAG) consumed by Z-Downloader."
-          fi
-
-      - name: Verify GitHub Release 0.0.011 API & Assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh api "repos/${{ github.repository }}/releases/tags/0.0.011" --jq '.assets[].name' > /tmp/release_assets.txt
-          cat /tmp/release_assets.txt
-          grep -qx "youtube.apk" /tmp/release_assets.txt
-          grep -qx "youtube-metadata.json" /tmp/release_assets.txt
 
   deploy-site:
     name: Package & Deploy Z-Downloader Website

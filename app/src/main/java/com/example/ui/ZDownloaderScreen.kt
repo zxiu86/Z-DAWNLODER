@@ -415,7 +415,9 @@ private fun YouTubeAppCard(
               )
               SpecTile(
                   label = stringResource(R.string.label_architecture),
-                  value = metadata.supportedAbis.ifEmpty { listOf("universal") }.joinToString(", "),
+                  value =
+                      metadata.supportedAbis.ifEmpty { listOf("يفحص عند التنزيل") }
+                          .joinToString(", "),
                   modifier = Modifier.weight(1f),
               )
             }
@@ -442,7 +444,9 @@ private fun YouTubeAppCard(
             )
             SpecTile(
                 label = stringResource(R.string.label_architecture),
-                value = metadata.supportedAbis.ifEmpty { listOf("universal") }.joinToString(", "),
+                value =
+                    metadata.supportedAbis.ifEmpty { listOf("يفحص عند التنزيل") }
+                        .joinToString(", "),
                 modifier = Modifier.weight(1f),
             )
           }
@@ -777,7 +781,7 @@ private fun LoadingCard() {
             color = TextPrimary,
         )
         Text(
-            text = "جاري التحقق من youtube.apk وملف youtube-metadata.json بدون حساب GitHub...",
+            text = "جاري قراءة أصول الإصدار 0.0.011 مباشرة من GitHub Releases بدون حساب...",
             style = MaterialTheme.typography.bodyMedium,
             color = TextSecondary,
         )

@@ -6,3 +6,7 @@
 -dontwarn org.openjsse.**
 -dontwarn javax.annotation.**
 -dontwarn java.lang.invoke.StringConcatFactory
+
+-keepclassmembers class * extends androidx.lifecycle.AndroidViewModel {
+    <init>(android.app.Application);
+}

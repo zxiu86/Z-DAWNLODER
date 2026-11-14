@@ -40,9 +40,17 @@ data class ZDownloaderUiState(
 
 class ZDownloaderViewModel(
     application: Application,
-    private val gitHubClient: GitHubReleaseClient = GitHubReleaseClient(),
-    private val repoConfigStore: RepoConfigStore = RepoConfigStore(application),
+    private val gitHubClient: GitHubReleaseClient,
+    private val repoConfigStore: RepoConfigStore,
 ) : AndroidViewModel(application) {
+
+  constructor(
+      application: Application
+  ) : this(
+      application = application,
+      gitHubClient = GitHubReleaseClient(),
+      repoConfigStore = RepoConfigStore(application),
+  )
 
   private val _uiState =
       MutableStateFlow(
